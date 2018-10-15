@@ -5,12 +5,13 @@ import (
 	"github.com/gin-gonic/gin"
 	"figin/app/routers"
 	_ "log"
-	"os"
 	// 初始化服务提供者
 	"figin/app/providers/database"
 
 	"figin/system"
-	log "github.com/sirupsen/logrus"
+	"figin/app/providers/log"
+
+	"figin/database/migrations"
 )
 
 func Init() {
@@ -25,18 +26,12 @@ func Init() {
 	// 初始化提供者
 	dbConfig := &database.DbConfig{ SqlConnect: config.SqlConnect }
 	database.DbInit(dbConfig)
+	
+	// 数据迁移
+	migration.Migrate()
+
 	// 日志
-	log.SetFormatter(&log.JSONFormatter{})
-	filename := "figin.log"
-	f, err := os.OpenFile(filename, os.O_WRONLY | os.O_CREATE | os.O_APPEND, 0755)
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.SetOutput(f)
-	log.SetLevel(log.WarnLevel)
-	log.WithFields(log.Fields{
-		"animal": "walrus",
-	  }).Warning("A walrus appears")
+	log.LogInit()
 
 	// 线上环境
 	if config.Env == "prod" {

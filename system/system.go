@@ -4,6 +4,8 @@ import (
 	"io/ioutil"
 	"gopkg.in/yaml.v2"
 	"figin/app/providers/database"
+	"figin/app/providers/log"
+
 	"database/sql"
 )
 
@@ -40,6 +42,11 @@ func Config() *Configuration {
 // 集成数据库服务
 func Db(dbType string) *sql.DB {
 	return database.Db(dbType)
+}
+
+// 集成日志服务
+func Log(msg string) {
+	log.Logger(msg)
 }
 
 func init() {
