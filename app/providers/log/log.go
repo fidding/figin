@@ -4,7 +4,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	"os"
 )
-
 func Logger(msg string) {
 	log.WithFields(log.Fields{}).Info(msg)
 }

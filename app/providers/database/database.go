@@ -1,43 +1,53 @@
 package database
 
 import (
-	"database/sql"
 	_ "github.com/go-sql-driver/mysql"
+	"database/sql"
 	"fmt"
 	"figin/config"
 )
 
-var pool DbStruct
+type DataObject struct {
+	Conf *config.Configuration
+	pool DbStruct
+}
 
-var conf *config.Configuration
+func (data *DataObject) Load(conf *config.Configuration) *DataObject {
+	// 加载配置
+	data.Conf = conf
+	// 加载sql连接池
+	if data.Conf.SqlConnect != "" {
+		data.connectSql()
+	}
+	return data
+}
 
-// 初始化入口
-func DbInit() {
-	if conf = config.Config(); conf.SqlConnect != "" {
-		connectSql()
+func (data *DataObject) DbInit() {
+	if data.Conf = config.Config(); data.Conf.SqlConnect != "" {
+		data.connectSql()
 	}
 }
 
-// 连接SQL
-func connectSql() {
+func (data *DataObject) connectSql() {
 	var err error
 	fmt.Println("connect db start")
-	pool.sql, err = sql.Open("mysql", conf.SqlConnect)
+	data.pool.sql, err = sql.Open("mysql", data.Conf.SqlConnect)
 	if err != nil {
 		fmt.Println("connect db fail")
 		fmt.Println(err)
 	}
-	defer pool.sql.Close()
+	defer data.pool.sql.Close()
 }
 
 // 返回DB连接池
-func Db(dbType string) *sql.DB {
+func (data *DataObject) Db(dbType string) *sql.DB {
+	fmt.Println(data)
 	if dbType == "sql" {
 		// 连接池为空，重新连接
-		if conf.SqlConnect != "" && pool.sql == nil {
-			connectSql()
+		if data.Conf.SqlConnect != "" && data.pool.sql == nil {
+			data.connectSql()
 		}
-		return pool.sql
+		return data.pool.sql
 	}
 	return nil
 }

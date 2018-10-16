@@ -8,7 +8,7 @@ import (
 
 func BusPv(c *gin.Context) {
 
-	fmt.Println(system.Db("sql"))
+	fmt.Println(system.DB)
 
 	c.JSON(200, gin.H{
 		"message": "BusPv:123",

@@ -6,7 +6,6 @@ import (
 	"figin/app/routers"
 	_ "log"
 	// 初始化服务提供者
-	"figin/app/providers/database"
 
 	"figin/system"
 	"figin/config"
@@ -25,7 +24,7 @@ func Init() {
 	config := system.Config()
 
 	// 初始化提供者
-	database.DbInit()
+	system.DbInit()
 	
 	// 数据迁移
 	migration.Migrate()
