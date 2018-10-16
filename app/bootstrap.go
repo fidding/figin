@@ -9,6 +9,7 @@ import (
 	"figin/app/providers/database"
 
 	"figin/system"
+	"figin/config"
 	"figin/app/providers/log"
 
 	"figin/database/migrations"
@@ -17,15 +18,14 @@ import (
 func Init() {
 	// 加载配置信息
 	var configFile string = "config.yaml"
-	if err := system.LoadConfiguration(configFile); err != nil {
+	if err := config.LoadConfiguration(configFile); err != nil {
 		fmt.Println("load configuration err:", err)
 		return
 	}
 	config := system.Config()
 
 	// 初始化提供者
-	dbConfig := &database.DbConfig{ SqlConnect: config.SqlConnect }
-	database.DbInit(dbConfig)
+	database.DbInit()
 	
 	// 数据迁移
 	migration.Migrate()
