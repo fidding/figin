@@ -1,39 +1,32 @@
 package bootstrap
 
 import (
+	router "figin/app/routers"
 	"fmt"
+
 	"github.com/gin-gonic/gin"
-	"figin/app/routers"
-	_ "log"
-	// 初始化服务提供者
 
-	"figin/system"
+	"figin/app/providers/logger"
 	"figin/config"
-	"figin/app/providers/log"
 
-	"figin/database/migrations"
+	"figin/app/providers/database"
+	migration "figin/database/migrations"
 )
 
+// Init 初始化
 func Init() {
-	// 加载配置信息
-	var configFile string = "config.yaml"
-	if err := config.LoadConfiguration(configFile); err != nil {
-		fmt.Println("load configuration err:", err)
-		return
-	}
-	config := system.Config()
-
-	// 初始化提供者
-	system.DbInit()
-	
+	// 配置初始化
+	config.Setup()
+	// 数据库初始化
+	database.Setup()
 	// 数据迁移
-	migration.Migrate()
-
+	migration.Setup()
 	// 日志
-	log.LogInit()
+	logger.Setup()
 
+	conf := config.GetConf()
 	// 线上环境
-	if config.Env == "prod" {
+	if conf.Server.Env == "prod" {
 		gin.SetMode(gin.ReleaseMode)
 	} else {
 		gin.SetMode(gin.DebugMode)
@@ -48,9 +41,10 @@ func Init() {
 	r = router.Init(r)
 
 	// 启动
-	r.Run(":" + config.Port)
+	// r.Run(":" + config.Port)
+	r.Run(fmt.Sprintf(":%d", conf.Server.Port))
 }
 
 func main() {
-	
+
 }

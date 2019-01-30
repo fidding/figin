@@ -1,28 +1,39 @@
 package config
 
 import (
+	"bytes"
+	"fmt"
 	"io/ioutil"
-	"gopkg.in/yaml.v2"
+	"log"
+
+	"github.com/spf13/viper"
 )
 
-var configuration *Configuration
-
-// 加载配置文件
-func LoadConfiguration(path string) error {
-	data, err := ioutil.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	var config Configuration
-	err = yaml.Unmarshal(data, &config)
-	if err != nil {
-		return err
-	}
-	configuration = &config
-	return err
+var conf = &Configuration{
+	Server: server{},
+	DB:     database{},
+	Cache:  cache{},
+	Logger: logger{},
 }
 
-// 读取配置信息
-func Config() *Configuration {
-	return configuration
+// GetConf 获取配置信息
+func GetConf() *Configuration {
+	return conf
+}
+
+// Setup 配置初始化
+func Setup() {
+	viper.SetConfigType("YAML")
+	// 读取配置文件
+	data, err := ioutil.ReadFile("config.yaml")
+	if err != nil {
+		log.Fatalf("Read 'config.yaml' fail: %v\n", err)
+	}
+	// 解析配置文件
+	viper.ReadConfig(bytes.NewBuffer(data))
+	viper.UnmarshalKey("server", &conf.Server)
+	viper.UnmarshalKey("database", &conf.DB)
+	viper.UnmarshalKey("cache", &conf.Cache)
+	viper.UnmarshalKey("log", &conf.Logger)
+	fmt.Println(conf)
 }
