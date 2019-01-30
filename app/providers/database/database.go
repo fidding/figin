@@ -24,7 +24,7 @@ func Setup() {
 	var err error
 	var conf = config.GetConf()
 	var connect = fmt.Sprintf(
-		"%s:%s@%s/%s?charset=utf8&parseTime=True&loc=Local",
+		"%s:%s@tcp(%s)/%s?charset=utf8&parseTime=True&loc=Local",
 		conf.DB.User,
 		conf.DB.Password,
 		conf.DB.Host+":"+strconv.Itoa(conf.DB.Port),
