@@ -1,10 +1,14 @@
 package migration
+
 import (
 	"github.com/jinzhu/gorm"
+	// _ mysql driver
 	_ "github.com/go-sql-driver/mysql"
 	"time"
 )
-type Test struct {
+
+// User 用户表
+type User struct {
 	gorm.Model
 	Name         string
 	Type         string

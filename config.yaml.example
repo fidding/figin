@@ -1,0 +1,31 @@
+# 服务器基本配置
+# env: local/env/prod
+server:
+  name: figin
+  env: local
+  port: 8088
+  author: fidding
+  debug: true
+
+# 数据库配置
+database:
+  dbType: mysql
+  user: fidding
+  password: fidding
+  host: 127.0.0.1
+  port: 3306
+  dbName: fidding
+
+# 缓存配置
+cache:
+  cacheType: redis
+  host: 127.0.0.1
+  password:
+  db: 0
+
+# 日志配置
+# logType: stdout/file
+# level: info/warn/debug/error/fatal/panic
+logger:
+  logType: stdout
+  level: info
