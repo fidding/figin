@@ -9,6 +9,7 @@ import (
 	"figin/app/providers/logger"
 	"figin/config"
 
+	"figin/app/providers/cache"
 	"figin/app/providers/database"
 	migration "figin/database/migrations"
 )
@@ -23,6 +24,8 @@ func Init() {
 	migration.Setup()
 	// 日志
 	logger.Setup()
+	// 缓存
+	cache.Setup()
 
 	conf := config.GetConf()
 	// 线上环境
@@ -41,10 +44,5 @@ func Init() {
 	r = router.Init(r)
 
 	// 启动
-	// r.Run(":" + config.Port)
 	r.Run(fmt.Sprintf(":%d", conf.Server.Port))
-}
-
-func main() {
-
 }

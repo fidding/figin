@@ -32,6 +32,7 @@ type database struct {
 type cache struct {
 	CacheType string `mapstructure:"cacheType"`
 	Host      string `mapstructure:"host"`
+	Port      int    `mapstructure:"port"`
 	Password  string `mapstructure:"password"`
 	DB        int    `mapstructure:"db"`
 }
