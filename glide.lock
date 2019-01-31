@@ -1,5 +1,5 @@
-hash: 7e80211f4eade1e5ad0092413cb8829c2f418ca12d20e0c54d08759d2fa8fb41
-updated: 2019-01-31T09:50:27.540538+08:00
+hash: b10bb349c20cf00fdb580548c0406a6be39443d6c60ae654db300b03f6f83701
+updated: 2019-01-31T10:25:32.169511+08:00
 imports:
 - name: github.com/fsnotify/fsnotify
   version: ccc981bf80385c528a65fbfdd49bf2d8da22aa23
@@ -11,6 +11,8 @@ imports:
   - binding
   - json
   - render
+- name: github.com/go-redis/redis
+  version: 22be8a3eaf992c828cecb69dc07348313bf08d2e
 - name: github.com/go-sql-driver/mysql
   version: 72cd26f257d44c1114970e19afddcd812016007e
 - name: github.com/golang/protobuf
