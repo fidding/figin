@@ -158,15 +158,31 @@ func init() {
 	refBitset.set(byte(reflect.Chan))
 }
 
+type clsErr struct {
+	closed    bool  // is it closed?
+	errClosed error // error on closing
+}
+
+// type entryType uint8
+
+// const (
+// 	entryTypeBytes entryType = iota // make this 0, so a comparison is cheap
+// 	entryTypeIo
+// 	entryTypeBufio
+// 	entryTypeUnset = 255
+// )
+
 type charEncoding uint8
 
 const (
-	cRAW charEncoding = iota
+	_ charEncoding = iota // make 0 unset
 	cUTF8
 	cUTF16LE
 	cUTF16BE
 	cUTF32LE
 	cUTF32BE
+	// Deprecated: not a true char encoding value
+	cRAW charEncoding = 255
 )
 
 // valueType is the stream type
@@ -373,7 +389,7 @@ var (
 	intBitsize  = uint8(intTyp.Bits())
 	uintBitsize = uint8(uintTyp.Bits())
 
-	bsAll0x00 = []byte{0, 0, 0, 0, 0, 0, 0, 0}
+	// bsAll0x00 = []byte{0, 0, 0, 0, 0, 0, 0, 0}
 	bsAll0xff = []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
 
 	chkOvf checkOverflow
@@ -418,6 +434,13 @@ var immutableKindsSet = [32]bool{
 // Any type which implements Selfer will be able to encode or decode itself.
 // Consequently, during (en|de)code, this takes precedence over
 // (text|binary)(M|Unm)arshal or extension support.
+//
+// By definition, it is not allowed for a Selfer to directly call Encode or Decode on itself.
+// If that is done, Encode/Decode will rightfully fail with a Stack Overflow style error.
+// For example, the snippet below will cause such an error.
+//     type testSelferRecur struct{}
+//     func (s *testSelferRecur) CodecEncodeSelf(e *Encoder) { e.MustEncode(s) }
+//     func (s *testSelferRecur) CodecDecodeSelf(d *Decoder) { d.MustDecode(s) }
 //
 // Note: *the first set of bytes of any value MUST NOT represent nil in the format*.
 // This is because, during each decode, we first check the the next set of bytes
@@ -523,11 +546,18 @@ func (x *BasicHandle) getTypeInfo(rtid uintptr, rt reflect.Type) (pti *typeInfo)
 	return x.TypeInfos.get(rtid, rt)
 }
 
-// Handle is the interface for a specific encoding format.
+// Handle defines a specific encoding format. It also stores any runtime state
+// used during an Encoding or Decoding session e.g. stored state about Types, etc.
 //
-// Typically, a Handle is pre-configured before first time use,
-// and not modified while in use. Such a pre-configured Handle
-// is safe for concurrent access.
+// Once a handle is configured, it can be shared across multiple Encoders and Decoders.
+//
+// Note that a Handle is NOT safe for concurrent modification.
+// Consequently, do not modify it after it is configured if shared among
+// multiple Encoders and Decoders in different goroutines.
+//
+// Consequently, the typical usage model is that a Handle is pre-configured
+// before first time use, and not modified while in use.
+// Such a pre-configured Handle is safe for concurrent access.
 type Handle interface {
 	Name() string
 	getBasicHandle() *BasicHandle
@@ -686,7 +716,7 @@ func (noElemSeparators) recreateEncDriver(e encDriver) (v bool) { return }
 // Users must already slice the x completely, because we will not reslice.
 type bigenHelper struct {
 	x []byte // must be correctly sliced to appropriate len. slicing is a cost.
-	w encWriter
+	w *encWriterSwitch
 }
 
 func (z bigenHelper) writeUint16(v uint16) {
@@ -1219,7 +1249,7 @@ func (x *TypeInfos) get(rtid uintptr, rt reflect.Type) (pti *typeInfo) {
 	sp := x.infos.load()
 	var idx int
 	if sp != nil {
-		idx, pti = x.find(sp, rtid)
+		_, pti = x.find(sp, rtid)
 		if pti != nil {
 			return
 		}
@@ -1717,6 +1747,7 @@ func (c *codecFner) reset(hh Handle) {
 	if !hhSame {
 		// c.hh = hh
 		c.h, bh = bh, c.h // swap both
+		_ = bh
 		_, c.js = hh.(*JsonHandle)
 		c.be = hh.isBinary()
 		if len(c.s) > 0 {
@@ -2270,9 +2301,11 @@ type bitset256 [32]byte
 func (x *bitset256) isset(pos byte) bool {
 	return x[pos>>3]&(1<<(pos&7)) != 0
 }
-func (x *bitset256) issetv(pos byte) byte {
-	return x[pos>>3] & (1 << (pos & 7))
-}
+
+// func (x *bitset256) issetv(pos byte) byte {
+// 	return x[pos>>3] & (1 << (pos & 7))
+// }
+
 func (x *bitset256) set(pos byte) {
 	x[pos>>3] |= (1 << (pos & 7))
 }
@@ -2328,8 +2361,9 @@ func (x *bitset32) set(pos byte) {
 type pooler struct {
 	dn                                          sync.Pool // for decNaked
 	cfn                                         sync.Pool // for codecFner
-	tiload                                      sync.Pool
+	tiload                                      sync.Pool // for type info loading
 	strRv8, strRv16, strRv32, strRv64, strRv128 sync.Pool // for stringRV
+	// buf64, buf128, buf256, buf512, buf1024      sync.Pool // for [...]byte
 }
 
 func (p *pooler) init() {
@@ -2338,8 +2372,17 @@ func (p *pooler) init() {
 	p.strRv32.New = func() interface{} { return new([32]sfiRv) }
 	p.strRv64.New = func() interface{} { return new([64]sfiRv) }
 	p.strRv128.New = func() interface{} { return new([128]sfiRv) }
+
+	// p.buf64.New = func() interface{} { return new([64]byte) }
+	// p.buf128.New = func() interface{} { return new([128]byte) }
+	// p.buf256.New = func() interface{} { return new([256]byte) }
+	// p.buf512.New = func() interface{} { return new([512]byte) }
+	// p.buf1024.New = func() interface{} { return new([1024]byte) }
+
 	p.dn.New = func() interface{} { x := new(decNaked); x.init(); return x }
+
 	p.tiload.New = func() interface{} { return new(typeInfoLoadArray) }
+
 	p.cfn.New = func() interface{} { return new(codecFner) }
 }
 
@@ -2358,6 +2401,23 @@ func (p *pooler) sfiRv64() (sp *sync.Pool, v interface{}) {
 func (p *pooler) sfiRv128() (sp *sync.Pool, v interface{}) {
 	return &p.strRv128, p.strRv128.Get()
 }
+
+// func (p *pooler) bytes64() (sp *sync.Pool, v interface{}) {
+// 	return &p.buf64, p.buf64.Get()
+// }
+// func (p *pooler) bytes128() (sp *sync.Pool, v interface{}) {
+// 	return &p.buf128, p.buf128.Get()
+// }
+// func (p *pooler) bytes256() (sp *sync.Pool, v interface{}) {
+// 	return &p.buf256, p.buf256.Get()
+// }
+// func (p *pooler) bytes512() (sp *sync.Pool, v interface{}) {
+// 	return &p.buf512, p.buf512.Get()
+// }
+// func (p *pooler) bytes1024() (sp *sync.Pool, v interface{}) {
+// 	return &p.buf1024, p.buf1024.Get()
+// }
+
 func (p *pooler) decNaked() (sp *sync.Pool, v interface{}) {
 	return &p.dn, p.dn.Get()
 }
@@ -2392,6 +2452,8 @@ func (p *pooler) tiLoad() (sp *sync.Pool, v interface{}) {
 // 	p.tiload.Put(v)
 // }
 
+// ----------------------------------------------------
+
 type panicHdl struct{}
 
 func (panicHdl) errorv(err error) {
@@ -2407,14 +2469,15 @@ func (panicHdl) errorstr(message string) {
 }
 
 func (panicHdl) errorf(format string, params ...interface{}) {
-	if format != "" {
-		if len(params) == 0 {
-			panic(format)
-		} else {
-			panic(fmt.Sprintf(format, params...))
-		}
+	if format == "" {
+	} else if len(params) == 0 {
+		panic(format)
+	} else {
+		panic(fmt.Sprintf(format, params...))
 	}
 }
+
+// ----------------------------------------------------
 
 type errDecorator interface {
 	wrapErr(in interface{}, out *error)
@@ -2423,6 +2486,8 @@ type errDecorator interface {
 type errDecoratorDef struct{}
 
 func (errDecoratorDef) wrapErr(v interface{}, e *error) { *e = fmt.Errorf("%v", v) }
+
+// ----------------------------------------------------
 
 type must struct{}
 

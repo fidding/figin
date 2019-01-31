@@ -4,7 +4,6 @@
 package codec
 
 import (
-	"bufio"
 	"encoding"
 	"errors"
 	"fmt"
@@ -16,11 +15,18 @@ import (
 	"time"
 )
 
-const defEncByteBufSize = 1 << 6 // 4:16, 6:64, 8:256, 10:1024
+// defEncByteBufSize is the default size of []byte used
+// for bufio buffer or []byte (when nil passed)
+const defEncByteBufSize = 1 << 10 // 4:16, 6:64, 8:256, 10:1024
 
 var errEncoderNotInitialized = errors.New("Encoder not initialized")
 
+/*
+
 // encWriter abstracts writing to a byte array or to an io.Writer.
+//
+//
+// Deprecated: Use encWriterSwitch instead.
 type encWriter interface {
 	writeb([]byte)
 	writestr(string)
@@ -28,6 +34,8 @@ type encWriter interface {
 	writen2(byte, byte)
 	atEndOfEncode()
 }
+
+*/
 
 // encDriver abstracts the actual codec (binc vs msgpack, etc)
 type encDriver interface {
@@ -40,9 +48,14 @@ type encDriver interface {
 	// encodeExtPreamble(xtag byte, length int)
 	EncodeRawExt(re *RawExt, e *Encoder)
 	EncodeExt(v interface{}, xtag uint64, ext Ext, e *Encoder)
+	// Deprecated: try to use EncodeStringEnc instead
 	EncodeString(c charEncoding, v string)
+	// c cannot be cRAW
+	EncodeStringEnc(c charEncoding, v string)
 	// EncodeSymbol(v string)
+	// Deprecated: try to use EncodeStringBytesRaw instead
 	EncodeStringBytes(c charEncoding, v []byte)
+	EncodeStringBytesRaw(v []byte)
 	EncodeTime(time.Time)
 	//encBignum(f *big.Int)
 	//encStringRunes(c charEncoding, v []rune)
@@ -56,10 +69,6 @@ type encDriver interface {
 
 	reset()
 	atEndOfEncode()
-}
-
-type ioEncStringWriter interface {
-	WriteString(s string) (n int, err error)
 }
 
 type encDriverAsis interface {
@@ -178,6 +187,12 @@ type EncodeOptions struct {
 
 // ---------------------------------------------
 
+/*
+
+type ioEncStringWriter interface {
+	WriteString(s string) (n int, err error)
+}
+
 // ioEncWriter implements encWriter and can write to an io.Writer implementation
 type ioEncWriter struct {
 	w  io.Writer
@@ -186,6 +201,19 @@ type ioEncWriter struct {
 	sw ioEncStringWriter
 	fw ioFlusher
 	b  [8]byte
+}
+
+func (z *ioEncWriter) reset(w io.Writer) {
+	z.w = w
+	var ok bool
+	if z.bw, ok = w.(io.ByteWriter); !ok {
+		z.bw = z
+	}
+	if z.sw, ok = w.(ioEncStringWriter); !ok {
+		z.sw = z
+	}
+	z.fw, _ = w.(ioFlusher)
+	z.ww = w
 }
 
 func (z *ioEncWriter) WriteByte(b byte) (err error) {
@@ -233,11 +261,104 @@ func (z *ioEncWriter) writen2(b1, b2 byte) {
 // 	}
 // }
 
+//go:noinline (so *encWriterSwitch.XXX has the bytesEncAppender.XXX inlined)
 func (z *ioEncWriter) atEndOfEncode() {
 	if z.fw != nil {
 		if err := z.fw.Flush(); err != nil {
 			panic(err)
 		}
+	}
+}
+
+*/
+
+// ---------------------------------------------
+
+// bufioEncWriter
+type bufioEncWriter struct {
+	buf []byte
+	w   io.Writer
+	n   int
+	// _   [2]uint64 // padding
+	// a int
+	// b   [4]byte
+	// err
+}
+
+func (z *bufioEncWriter) reset(w io.Writer, bufsize int) {
+	z.w = w
+	z.n = 0
+	if bufsize == 0 {
+		bufsize = defEncByteBufSize
+	}
+	if cap(z.buf) < bufsize {
+		z.buf = make([]byte, bufsize)
+	} else {
+		z.buf = z.buf[:bufsize]
+	}
+}
+
+//go:noinline
+func (z *bufioEncWriter) flush() {
+	n, err := z.w.Write(z.buf[:z.n])
+	z.n -= n
+	if z.n > 0 && err == nil {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		if n > 0 && z.n > 0 {
+			copy(z.buf, z.buf[n:z.n+n])
+		}
+		panic(err)
+	}
+}
+
+func (z *bufioEncWriter) writeb(s []byte) {
+LOOP:
+	a := len(z.buf) - z.n
+	if len(s) > a {
+		z.n += copy(z.buf[z.n:], s[:a])
+		s = s[a:]
+		z.flush()
+		goto LOOP
+	}
+	z.n += copy(z.buf[z.n:], s)
+}
+
+func (z *bufioEncWriter) writestr(s string) {
+	// z.writeb(bytesView(s)) // inlined below
+LOOP:
+	a := len(z.buf) - z.n
+	if len(s) > a {
+		z.n += copy(z.buf[z.n:], s[:a])
+		s = s[a:]
+		z.flush()
+		goto LOOP
+	}
+	z.n += copy(z.buf[z.n:], s)
+}
+
+//go:noinline // TODO: allow this be inlined once mid-stack inlining done
+func (z *bufioEncWriter) writen1(b1 byte) {
+	if 1 > len(z.buf)-z.n {
+		z.flush()
+	}
+	z.buf[z.n] = b1
+	z.n++
+}
+
+func (z *bufioEncWriter) writen2(b1, b2 byte) {
+	if 2 > len(z.buf)-z.n {
+		z.flush()
+	}
+	z.buf[z.n+1] = b2
+	z.buf[z.n] = b1
+	z.n += 2
+}
+
+func (z *bufioEncWriter) atEndOfEncode() {
+	if z.n > 0 {
+		z.flush()
 	}
 }
 
@@ -285,17 +406,17 @@ func (e *Encoder) selferMarshal(f *codecFnInfo, rv reflect.Value) {
 
 func (e *Encoder) binaryMarshal(f *codecFnInfo, rv reflect.Value) {
 	bs, fnerr := rv2i(rv).(encoding.BinaryMarshaler).MarshalBinary()
-	e.marshal(bs, fnerr, false, cRAW)
+	e.marshalRaw(bs, fnerr)
 }
 
 func (e *Encoder) textMarshal(f *codecFnInfo, rv reflect.Value) {
 	bs, fnerr := rv2i(rv).(encoding.TextMarshaler).MarshalText()
-	e.marshal(bs, fnerr, false, cUTF8)
+	e.marshalUtf8(bs, fnerr)
 }
 
 func (e *Encoder) jsonMarshal(f *codecFnInfo, rv reflect.Value) {
 	bs, fnerr := rv2i(rv).(jsonMarshaler).MarshalJSON()
-	e.marshal(bs, fnerr, true, cUTF8)
+	e.marshalAsis(bs, fnerr)
 }
 
 func (e *Encoder) raw(f *codecFnInfo, rv reflect.Value) {
@@ -325,7 +446,7 @@ func (e *Encoder) kSlice(f *codecFnInfo, rv reflect.Value) {
 		// If in this method, then there was no extension function defined.
 		// So it's okay to treat as []byte.
 		if ti.rtid == uint8SliceTypId {
-			ee.EncodeStringBytes(cRAW, rv.Bytes())
+			ee.EncodeStringBytesRaw(rv.Bytes())
 			return
 		}
 	}
@@ -340,11 +461,11 @@ func (e *Encoder) kSlice(f *codecFnInfo, rv reflect.Value) {
 	if rtelemIsByte {
 		switch f.seq {
 		case seqTypeSlice:
-			ee.EncodeStringBytes(cRAW, rv.Bytes())
+			ee.EncodeStringBytesRaw(rv.Bytes())
 		case seqTypeArray:
 			l = rv.Len()
 			if rv.CanAddr() {
-				ee.EncodeStringBytes(cRAW, rv.Slice(0, l).Bytes())
+				ee.EncodeStringBytesRaw(rv.Slice(0, l).Bytes())
 			} else {
 				var bs []byte
 				if l <= cap(e.b) {
@@ -353,7 +474,7 @@ func (e *Encoder) kSlice(f *codecFnInfo, rv reflect.Value) {
 					bs = make([]byte, l)
 				}
 				reflect.Copy(reflect.ValueOf(bs), rv)
-				ee.EncodeStringBytes(cRAW, bs)
+				ee.EncodeStringBytesRaw(bs)
 			}
 		case seqTypeChan:
 			// do not use range, so that the number of elements encoded
@@ -400,7 +521,7 @@ func (e *Encoder) kSlice(f *codecFnInfo, rv reflect.Value) {
 				}
 			}
 
-			ee.EncodeStringBytes(cRAW, bs)
+			ee.EncodeStringBytesRaw(bs)
 		}
 		return
 	}
@@ -499,14 +620,14 @@ func (e *Encoder) kStructNoOmitempty(f *codecFnInfo, rv reflect.Value) {
 		if elemsep {
 			for _, si := range tisfi {
 				ee.WriteMapElemKey()
-				// ee.EncodeString(cUTF8, si.encName)
+				// ee.EncodeStringEnc(cUTF8, si.encName)
 				e.kStructFieldKey(fti.keyType, si)
 				ee.WriteMapElemValue()
 				e.encodeValue(sfn.field(si), nil, true)
 			}
 		} else {
 			for _, si := range tisfi {
-				// ee.EncodeString(cUTF8, si.encName)
+				// ee.EncodeStringEnc(cUTF8, si.encName)
 				e.kStructFieldKey(fti.keyType, si)
 				e.encodeValue(sfn.field(si), nil, true)
 			}
@@ -538,7 +659,7 @@ func (e *Encoder) kStructFieldKey(keyType valueType, s *structFieldInfo) {
 			e.w.writestr(s.encName)
 			e.w.writen1('"')
 		} else { // keyType == valueTypeString
-			e.e.EncodeString(cUTF8, s.encName)
+			e.e.EncodeStringEnc(cUTF8, s.encName)
 		}
 	} else if keyType == valueTypeInt {
 		e.e.EncodeInt(m.Int(strconv.ParseInt(s.encName, 10, 64)))
@@ -554,7 +675,7 @@ func (e *Encoder) kStructFieldKeyName(keyType valueType, encName string) {
 	// use if-else-if, not switch (which compiles to binary-search)
 	// since keyType is typically valueTypeString, branch prediction is pretty good.
 	if keyType == valueTypeString {
-		e.e.EncodeString(cUTF8, encName)
+		e.e.EncodeStringEnc(cUTF8, encName)
 	} else if keyType == valueTypeInt {
 		e.e.EncodeInt(m.Int(strconv.ParseInt(encName, 10, 64)))
 	} else if keyType == valueTypeUint {
@@ -674,7 +795,7 @@ func (e *Encoder) kStruct(f *codecFnInfo, rv reflect.Value) {
 			for j := 0; j < newlen; j++ {
 				kv = fkvs[j]
 				ee.WriteMapElemKey()
-				// ee.EncodeString(cUTF8, kv.v)
+				// ee.EncodeStringEnc(cUTF8, kv.v)
 				e.kStructFieldKey(fti.keyType, kv.v)
 				ee.WriteMapElemValue()
 				e.encodeValue(kv.r, nil, true)
@@ -682,7 +803,7 @@ func (e *Encoder) kStruct(f *codecFnInfo, rv reflect.Value) {
 		} else {
 			for j := 0; j < newlen; j++ {
 				kv = fkvs[j]
-				// ee.EncodeString(cUTF8, kv.v)
+				// ee.EncodeStringEnc(cUTF8, kv.v)
 				e.kStructFieldKey(fti.keyType, kv.v)
 				e.encodeValue(kv.r, nil, true)
 			}
@@ -778,7 +899,7 @@ func (e *Encoder) kMap(f *codecFnInfo, rv reflect.Value) {
 			ee.WriteMapElemKey()
 		}
 		if keyTypeIsString {
-			ee.EncodeString(cUTF8, mks[j].String())
+			ee.EncodeStringEnc(cUTF8, mks[j].String())
 		} else {
 			e.encodeValue(mks[j], keyFn, true)
 		}
@@ -828,7 +949,7 @@ func (e *Encoder) kMapCanonical(rtkey reflect.Type, rv reflect.Value, mks []refl
 			if elemsep {
 				ee.WriteMapElemKey()
 			}
-			ee.EncodeString(cUTF8, mksv[i].v)
+			ee.EncodeStringEnc(cUTF8, mksv[i].v)
 			if elemsep {
 				ee.WriteMapElemValue()
 			}
@@ -958,19 +1079,111 @@ func (e *Encoder) kMapCanonical(rtkey reflect.Type, rv reflect.Value, mks []refl
 // // --------------------------------------------------
 
 type encWriterSwitch struct {
-	wi   *ioEncWriter
-	wb   bytesEncAppender
-	wx   bool      // if bytes, wx=true
-	esep bool      // whether it has elem separators
-	isas bool      // whether e.as != nil
-	js   bool      // here, so that no need to piggy back on *codecFner for this
-	be   bool      // here, so that no need to piggy back on *codecFner for this
-	_    [3]byte   // padding
-	_    [2]uint64 // padding
+	// wi   *ioEncWriter
+	wf bufioEncWriter
+	wb bytesEncAppender
+	// typ  entryType
+	wx   bool    // if bytes, wx=true
+	esep bool    // whether it has elem separators
+	isas bool    // whether e.as != nil
+	js   bool    // captured here, so that no need to piggy back on *codecFner for this
+	be   bool    // captured here, so that no need to piggy back on *codecFner for this
+	_    [2]byte // padding
+	// _    [2]uint64 // padding
+	// _    uint64    // padding
+}
+
+func (z *encWriterSwitch) writeb(s []byte) {
+	if z.wx {
+		z.wb.writeb(s)
+	} else {
+		z.wf.writeb(s)
+	}
+}
+func (z *encWriterSwitch) writestr(s string) {
+	if z.wx {
+		z.wb.writestr(s)
+	} else {
+		z.wf.writestr(s)
+	}
+}
+func (z *encWriterSwitch) writen1(b1 byte) {
+	if z.wx {
+		z.wb.writen1(b1)
+	} else {
+		z.wf.writen1(b1)
+	}
+}
+func (z *encWriterSwitch) writen2(b1, b2 byte) {
+	if z.wx {
+		z.wb.writen2(b1, b2)
+	} else {
+		z.wf.writen2(b1, b2)
+	}
+}
+func (z *encWriterSwitch) atEndOfEncode() {
+	if z.wx {
+		z.wb.atEndOfEncode()
+	} else {
+		z.wf.atEndOfEncode()
+	}
 }
 
 /*
 
+// ------------------------------------------
+func (z *encWriterSwitch) writeb(s []byte) {
+	switch z.typ {
+	case entryTypeBytes:
+		z.wb.writeb(s)
+	case entryTypeIo:
+		z.wi.writeb(s)
+	default:
+		z.wf.writeb(s)
+	}
+}
+func (z *encWriterSwitch) writestr(s string) {
+	switch z.typ {
+	case entryTypeBytes:
+		z.wb.writestr(s)
+	case entryTypeIo:
+		z.wi.writestr(s)
+	default:
+		z.wf.writestr(s)
+	}
+}
+func (z *encWriterSwitch) writen1(b1 byte) {
+	switch z.typ {
+	case entryTypeBytes:
+		z.wb.writen1(b1)
+	case entryTypeIo:
+		z.wi.writen1(b1)
+	default:
+		z.wf.writen1(b1)
+	}
+}
+func (z *encWriterSwitch) writen2(b1, b2 byte) {
+	switch z.typ {
+	case entryTypeBytes:
+		z.wb.writen2(b1, b2)
+	case entryTypeIo:
+		z.wi.writen2(b1, b2)
+	default:
+		z.wf.writen2(b1, b2)
+	}
+}
+func (z *encWriterSwitch) atEndOfEncode() {
+	switch z.typ {
+	case entryTypeBytes:
+		z.wb.atEndOfEncode()
+	case entryTypeIo:
+		z.wi.atEndOfEncode()
+	default:
+		z.wf.atEndOfEncode()
+	}
+}
+
+// ------------------------------------------
 func (z *encWriterSwitch) writeb(s []byte) {
 	if z.wx {
 		z.wb.writeb(s)
@@ -1009,25 +1222,33 @@ func (z *encWriterSwitch) atEndOfEncode() {
 
 */
 
-// An Encoder writes an object to an output stream in the codec format.
+// Encoder writes an object to an output stream in a supported format.
+//
+// Encoder is NOT safe for concurrent use i.e. a Encoder cannot be used
+// concurrently in multiple goroutines.
+//
+// However, as Encoder could be allocation heavy to initialize, a Reset method is provided
+// so its state can be reused to decode new input streams repeatedly.
+// This is the idiomatic way to use.
 type Encoder struct {
 	panicHdl
 	// hopefully, reduce derefencing cost by laying the encWriter inside the Encoder
 	e encDriver
+
 	// NOTE: Encoder shouldn't call it's write methods,
 	// as the handler MAY need to do some coordination.
-	w encWriter
+	w *encWriterSwitch
 
 	// bw *bufio.Writer
 	as encDriverAsis
 
 	err error
 
-	// ---- cpu cache line boundary?
+	h *BasicHandle
+
+	// ---- cpu cache line boundary? + 3
 	encWriterSwitch
 
-	// ---- cpu cache line boundary?
-	h *BasicHandle
 	codecFnPooler
 	ci set
 
@@ -1036,13 +1257,13 @@ type Encoder struct {
 	// ---- cpu cache line boundary?
 	// b [scratchByteArrayLen]byte
 	// _ [cacheLineSize - scratchByteArrayLen]byte // padding
-	b [cacheLineSize - 0]byte // used for encoding a chan or (non-addressable) array of bytes
+	b [cacheLineSize - (8 * 2)]byte // used for encoding a chan or (non-addressable) array of bytes
 }
 
 // NewEncoder returns an Encoder for encoding into an io.Writer.
 //
-// For efficiency, Users are encouraged to pass in a memory buffered writer
-// (eg bufio.Writer, bytes.Buffer).
+// For efficiency, Users are encouraged to configure WriterBufferSize on the handle
+// OR pass in a memory buffered writer (eg bufio.Writer, bytes.Buffer).
 func NewEncoder(w io.Writer, h Handle) *Encoder {
 	e := newEncoder(h)
 	e.Reset(w)
@@ -1062,6 +1283,7 @@ func NewEncoderBytes(out *[]byte, h Handle) *Encoder {
 
 func newEncoder(h Handle) *Encoder {
 	e := &Encoder{h: h.getBasicHandle(), err: errEncoderNotInitialized}
+	e.w = &e.encWriterSwitch
 	e.hh = h
 	e.esep = h.hasElemSeparators()
 	return e
@@ -1088,29 +1310,31 @@ func (e *Encoder) Reset(w io.Writer) {
 	if w == nil {
 		return
 	}
-	if e.wi == nil {
-		e.wi = new(ioEncWriter)
-	}
-	var ok bool
+	// var ok bool
 	e.wx = false
-	e.wi.w = w
-	if e.h.WriterBufferSize > 0 {
-		bw := bufio.NewWriterSize(w, e.h.WriterBufferSize)
-		e.wi.bw = bw
-		e.wi.sw = bw
-		e.wi.fw = bw
-		e.wi.ww = bw
-	} else {
-		if e.wi.bw, ok = w.(io.ByteWriter); !ok {
-			e.wi.bw = e.wi
-		}
-		if e.wi.sw, ok = w.(ioEncStringWriter); !ok {
-			e.wi.sw = e.wi
-		}
-		e.wi.fw, _ = w.(ioFlusher)
-		e.wi.ww = w
-	}
-	e.w = e.wi
+	// e.typ = entryTypeUnset
+	// if e.h.WriterBufferSize > 0 {
+	// 	// bw := bufio.NewWriterSize(w, e.h.WriterBufferSize)
+	// 	// e.wi.bw = bw
+	// 	// e.wi.sw = bw
+	// 	// e.wi.fw = bw
+	// 	// e.wi.ww = bw
+	// 	if e.wf == nil {
+	// 		e.wf = new(bufioEncWriter)
+	// 	}
+	// 	e.wf.reset(w, e.h.WriterBufferSize)
+	// 	e.typ = entryTypeBufio
+	// } else {
+	// 	if e.wi == nil {
+	// 		e.wi = new(ioEncWriter)
+	// 	}
+	// 	e.wi.reset(w)
+	// 	e.typ = entryTypeIo
+	// }
+	e.wf.reset(w, e.h.WriterBufferSize)
+	// e.typ = entryTypeBufio
+
+	// e.w = e.wi
 	e.resetCommon()
 }
 
@@ -1127,8 +1351,9 @@ func (e *Encoder) ResetBytes(out *[]byte) {
 		in = make([]byte, defEncByteBufSize)
 	}
 	e.wx = true
+	// e.typ = entryTypeBytes
 	e.wb.reset(in, out)
-	e.w = &e.wb
+	// e.w = &e.wb
 	e.resetCommon()
 }
 
@@ -1216,6 +1441,11 @@ func (e *Encoder) ResetBytes(out *[]byte) {
 // Some formats support symbols (e.g. binc) and will properly encode the string
 // only once in the stream, and use a tag to refer to it thereafter.
 func (e *Encoder) Encode(v interface{}) (err error) {
+	// tried to use closure, as runtime optimizes defer with no params.
+	// This seemed to be causing weird issues (like circular reference found, unexpected panic, etc).
+	// Also, see https://github.com/golang/go/issues/14939#issuecomment-417836139
+	// defer func() { e.deferred(&err) }() }
+	// { x, y := e, &err; defer func() { x.deferred(y) }() }
 	defer e.deferred(&err)
 	e.MustEncode(v)
 	return
@@ -1267,7 +1497,7 @@ func (e *Encoder) encode(iv interface{}) {
 		e.encodeValue(v, nil, true)
 
 	case string:
-		e.e.EncodeString(cUTF8, v)
+		e.e.EncodeStringEnc(cUTF8, v)
 	case bool:
 		e.e.EncodeBool(v)
 	case int:
@@ -1299,13 +1529,13 @@ func (e *Encoder) encode(iv interface{}) {
 	case time.Time:
 		e.e.EncodeTime(v)
 	case []uint8:
-		e.e.EncodeStringBytes(cRAW, v)
+		e.e.EncodeStringBytesRaw(v)
 
 	case *Raw:
 		e.rawBytes(*v)
 
 	case *string:
-		e.e.EncodeString(cUTF8, *v)
+		e.e.EncodeStringEnc(cUTF8, *v)
 	case *bool:
 		e.e.EncodeBool(*v)
 	case *int:
@@ -1338,7 +1568,7 @@ func (e *Encoder) encode(iv interface{}) {
 		e.e.EncodeTime(*v)
 
 	case *[]uint8:
-		e.e.EncodeStringBytes(cRAW, *v)
+		e.e.EncodeStringBytesRaw(*v)
 
 	default:
 		if !fastpathEncodeTypeSwitch(iv, e) {
@@ -1413,16 +1643,49 @@ TOP:
 	}
 }
 
-func (e *Encoder) marshal(bs []byte, fnerr error, asis bool, c charEncoding) {
+// func (e *Encoder) marshal(bs []byte, fnerr error, asis bool, c charEncoding) {
+// 	if fnerr != nil {
+// 		panic(fnerr)
+// 	}
+// 	if bs == nil {
+// 		e.e.EncodeNil()
+// 	} else if asis {
+// 		e.asis(bs)
+// 	} else {
+// 		e.e.EncodeStringBytes(c, bs)
+// 	}
+// }
+
+func (e *Encoder) marshalUtf8(bs []byte, fnerr error) {
 	if fnerr != nil {
 		panic(fnerr)
 	}
 	if bs == nil {
 		e.e.EncodeNil()
-	} else if asis {
-		e.asis(bs)
 	} else {
-		e.e.EncodeStringBytes(c, bs)
+		e.e.EncodeStringEnc(cUTF8, stringView(bs))
+	}
+}
+
+func (e *Encoder) marshalAsis(bs []byte, fnerr error) {
+	if fnerr != nil {
+		panic(fnerr)
+	}
+	if bs == nil {
+		e.e.EncodeNil()
+	} else {
+		e.asis(bs)
+	}
+}
+
+func (e *Encoder) marshalRaw(bs []byte, fnerr error) {
+	if fnerr != nil {
+		panic(fnerr)
+	}
+	if bs == nil {
+		e.e.EncodeNil()
+	} else {
+		e.e.EncodeStringBytesRaw(bs)
 	}
 }
 
