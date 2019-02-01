@@ -12,6 +12,7 @@ import (
 	"figin/app/providers/cache"
 	"figin/app/providers/database"
 	migration "figin/database/migrations"
+	"figin/system"
 )
 
 // Init 初始化
@@ -27,7 +28,10 @@ func Init() {
 	// 缓存
 	cache.Setup()
 
-	conf := config.GetConf()
+	// 将组件挂载到sys
+	system.Setup()
+
+	conf := system.Conf
 	// 线上环境
 	if conf.Server.Env == "prod" {
 		gin.SetMode(gin.ReleaseMode)
