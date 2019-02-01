@@ -27,7 +27,6 @@ func Init() {
 	logger.Setup()
 	// 缓存
 	cache.Setup()
-
 	// 将组件挂载到sys
 	system.Setup()
 

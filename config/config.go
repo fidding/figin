@@ -34,6 +34,6 @@ func Setup() {
 	viper.UnmarshalKey("server", &conf.Server)
 	viper.UnmarshalKey("database", &conf.DB)
 	viper.UnmarshalKey("cache", &conf.Cache)
-	viper.UnmarshalKey("log", &conf.Logger)
+	viper.UnmarshalKey("logger", &conf.Logger)
 	fmt.Println(conf)
 }
