@@ -2,7 +2,7 @@ package logger
 
 import (
 	"figin/config"
-	"io"
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -11,6 +11,9 @@ import (
 )
 
 var logger *logrus.Logger
+
+// Fields 日志字段
+type Fields map[string]interface{}
 
 // GetLogger 获取log实例
 func GetLogger() *logrus.Logger {
@@ -44,17 +47,19 @@ func Setup() {
 	})
 	// 设置日志输出
 	logType := conf.Logger.LogType
-	var logOutPut io.Writer
 	switch logType {
 	case "stdout":
-		logOutPut = os.Stdout
+		logger.Out = os.Stdout
 	case "file":
+		fmt.Println("输出到日志")
 		logfile := "logs/figin.log"
 		f, err := os.OpenFile(logfile, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0755)
 		if err != nil {
 			log.Fatalf("Read 'logs/figin.log' fail: %v\n", err)
 		}
-		logOutPut = f
+		logger.Out = f
+	default:
+		logger.Out = os.Stdout
 	}
-	logger.SetOutput(logOutPut)
+	logger.Info("logger init")
 }
